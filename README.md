@@ -21,6 +21,10 @@ loading, structured choices and checkpoint temperature integration remain to
 be implemented. The necessary Magnetar runtime work is tracked in
 [Magnetar #215](https://github.com/astorise/Magnetar/issues/215).
 
-A real implementation must identify a specific checkpoint and its license, integrate the relevant Magnetar component and runtime contracts, and validate outputs against an independent reference. See the [upstream model or project](https://github.com/jaredpalmer/kev). Model weights are not included.
+A real implementation must integrate the relevant Magnetar component and
+runtime contracts and validate end-to-end outputs against an independent
+reference. See the [upstream model or project](https://github.com/jaredpalmer/kev).
+No full model weights are included; tests include a small subset of the
+Apache-2.0 Kev-0.8B head weights, with provenance in `tests/fixtures/`.
 
 This repository contains a model component, not a hardware Provider. It is intended to be checked out by Magnetar at `components/kev`.
