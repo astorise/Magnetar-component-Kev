@@ -23,7 +23,10 @@ for name, digest in [
     ("kev-0.8b-adapter-config.json", "748acb2cda88454cb1ba69d745ba336f3fcb5486eac349e90960c8b8d8d3e854"),
     ("qwen3.5-0.8b-base-config.json", "b90b86f35c8e6925ef74ee04d0e758f0a845c83a42089ad82bbaa948de9b4204"),
 ]:
-    if hashlib.sha256((root / name).read_bytes()).hexdigest() != digest:
+    # Git may check these JSON fixtures out with CRLF on Windows; their
+    # published bytes use LF and are what the digest identifies.
+    raw_config = (root / name).read_bytes().replace(b"\r\n", b"\n")
+    if hashlib.sha256(raw_config).hexdigest() != digest:
         raise ValueError(f"unexpected pinned config digest: {name}")
 if hashlib.sha256(adapter).hexdigest() != ADAPTER_SHA:
     raise ValueError("unexpected adapter checkpoint digest")
