@@ -10,6 +10,7 @@ use std::error::Error;
 use std::fmt;
 
 pub mod encoding;
+pub mod qwen35_adapter;
 
 /// Row-major affine transform, with weights shaped `[output_dim, input_dim]`.
 #[derive(Debug, Clone)]
