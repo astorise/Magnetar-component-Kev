@@ -221,6 +221,62 @@ pub fn apply_lora_f32(
     Ok(output)
 }
 
+/// Merge one checkpoint-order projection in f32: `W + scale * B * A`.
+///
+/// `base` has shape `[output_dim, input_dim]`, `a` has `[rank, input_dim]`
+/// and `b` has `[output_dim, rank]`. The result is a new row-major tensor;
+/// callers remain responsible for authenticating and decoding the base and
+/// adapter and for binding the resulting weights to the right model instance.
+/// A merged matrix may differ slightly from an unmerged overlay because f32
+/// arithmetic is reassociated. Invalid or non-finite values never mutate input.
+pub fn merge_lora_f32(
+    base: &[f32],
+    a: &[f32],
+    b: &[f32],
+    input_dim: usize,
+    output_dim: usize,
+    rank: usize,
+    scale: f32,
+) -> Result<Vec<f32>, ProfileError> {
+    let size = |left: usize, right: usize| {
+        left.checked_mul(right)
+            .filter(|&count| count > 0 && count <= MAX_ELEMENTS)
+    };
+    if size(output_dim, input_dim) != Some(base.len())
+        || size(rank, input_dim) != Some(a.len())
+        || size(output_dim, rank) != Some(b.len())
+        || !scale.is_finite()
+    {
+        return Err(ProfileError::InvalidDimensions);
+    }
+    if base
+        .iter()
+        .chain(a)
+        .chain(b)
+        .any(|value| !value.is_finite())
+    {
+        return Err(ProfileError::NonFiniteValue);
+    }
+    let mut result = Vec::with_capacity(base.len());
+    let mut delta = vec![0.0_f32; input_dim];
+    for (base_row, factor_row) in base.chunks_exact(input_dim).zip(b.chunks_exact(rank)) {
+        delta.fill(0.0);
+        for (&factor, a_row) in factor_row.iter().zip(a.chunks_exact(input_dim)) {
+            for (sum, &value) in delta.iter_mut().zip(a_row) {
+                *sum += factor * value;
+            }
+        }
+        for (&original, &addition) in base_row.iter().zip(&delta) {
+            let value = original + scale * addition;
+            if !value.is_finite() {
+                return Err(ProfileError::NonFiniteValue);
+            }
+            result.push(value);
+        }
+    }
+    Ok(result)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProfileError {
     UnsupportedConfig,

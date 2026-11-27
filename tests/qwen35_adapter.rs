@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use magnetar_component_kev::qwen35_adapter::{
-    Kev08bProfile, LayerKind, ProfileError, TensorInfo, apply_lora_f32,
+    Kev08bProfile, LayerKind, ProfileError, TensorInfo, apply_lora_f32, merge_lora_f32,
 };
 use serde::Deserialize;
 
@@ -208,6 +208,44 @@ fn invalid_factors_and_non_finite_results_fail_without_mutating_base() {
     assert_eq!(base, [1.0, 2.0]);
 }
 
+#[test]
+fn merges_checkpoint_order_factors_without_mutating_inputs() {
+    let base = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let a = [1.0, 0.0, -1.0, 0.0, 2.0, 1.0];
+    let b = [2.0, -1.0, 0.5, 3.0];
+    assert_eq!(
+        merge_lora_f32(&base, &a, &b, 3, 2, 2, 0.5).unwrap(),
+        [2.0, 1.0, 1.5, 4.25, 8.0, 7.25]
+    );
+    assert_eq!(base, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    assert_eq!(
+        merge_lora_f32(&base, &a[..5], &b, 3, 2, 2, 0.5),
+        Err(ProfileError::InvalidDimensions)
+    );
+    assert_eq!(
+        merge_lora_f32(&base, &a, &b, 3, 2, 0, 0.5),
+        Err(ProfileError::InvalidDimensions)
+    );
+    assert_eq!(
+        merge_lora_f32(&base, &a, &b, usize::MAX, 2, 2, 0.5),
+        Err(ProfileError::InvalidDimensions)
+    );
+    assert_eq!(
+        merge_lora_f32(&base, &a, &b, 3, 2, 2, f32::NAN),
+        Err(ProfileError::InvalidDimensions)
+    );
+    let mut nonfinite = base;
+    nonfinite[0] = f32::INFINITY;
+    assert_eq!(
+        merge_lora_f32(&nonfinite, &a, &b, 3, 2, 2, 0.5),
+        Err(ProfileError::NonFiniteValue)
+    );
+    assert_eq!(
+        merge_lora_f32(&base, &[f32::MAX; 6], &b, 3, 2, 2, 2.0),
+        Err(ProfileError::NonFiniteValue)
+    );
+}
+
 /// Uses the complete real A/B factors rather than just the checked-in slices.
 #[test]
 #[ignore = "requires the pinned Kev checkpoint and a generated full PyTorch reference"]
@@ -278,14 +316,37 @@ fn full_real_adapter_projections_match_pytorch() {
             profile.scale(),
         )
         .unwrap();
+        let merged = merge_lora_f32(
+            &vec![0.0; target.output_dim * target.input_dim],
+            &a,
+            &b,
+            target.input_dim,
+            target.output_dim,
+            target.rank,
+            profile.scale(),
+        )
+        .unwrap();
+        let merged_output: Vec<f32> = merged
+            .chunks_exact(target.input_dim)
+            .zip(&case.base)
+            .map(|(row, base)| {
+                base + row
+                    .iter()
+                    .zip(&case.input)
+                    .map(|(weight, input)| weight * input)
+                    .sum::<f32>()
+            })
+            .collect();
         assert_eq!(actual.len(), case.output.len());
-        for (&value, &expected) in actual.iter().zip(&case.output) {
-            max_error = max_error.max((value - expected).abs());
-            assert!(
-                (value - expected).abs() < 2e-6 + 1e-6 * expected.abs(),
-                "{}: {value} != {expected}",
-                case.module
-            );
+        for values in [&actual, &merged_output] {
+            for (&value, &expected) in values.iter().zip(&case.output) {
+                max_error = max_error.max((value - expected).abs());
+                assert!(
+                    (value - expected).abs() < 2e-6 + 1e-6 * expected.abs(),
+                    "{}: {value} != {expected}",
+                    case.module
+                );
+            }
         }
     }
     eprintln!("maximum absolute error: {max_error}");

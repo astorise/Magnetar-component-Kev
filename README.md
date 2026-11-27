@@ -17,6 +17,9 @@ The Kev-0.8B profile identifies the 24 Qwen3.5 text layers and all 186
 LoRA targets in the pinned base/adapter checkpoints. A standalone f32 LoRA
 reference applies their standard rank-16 factors; real checkpoint tensor
 inventories and independent PyTorch comparisons are covered by the tests.
+An f32 merge reference can also fold a single pair of decoded LoRA factors into
+its checkpoint-order base projection. The caller must authenticate the inputs
+and bind the result to the matching model; merging may reassociate f32 math.
 These standalone references do not load a
 checkpoint, tokenize, run a Qwen backbone, produce a model graph, implement
 Component Model exports or execute end-to-end inference. Kev is not yet runnable
