@@ -32,6 +32,30 @@ temperature integration with the existing Qwen backbone remain to be implemented
 The necessary Magnetar runtime work is tracked in
 [Magnetar #215](https://github.com/astorise/Magnetar/issues/215).
 
+## Offline adapter conversion
+
+`tools/merge_kev_checkpoint.py` converts the pinned Kev-0.8B LoRA adapter and
+Qwen3.5-0.8B-Base checkpoint to a new Safetensors bundle. It verifies the exact
+base, adapter, configuration and Kev tokenizer hashes, checks all 186 factor
+pairs, and computes `W + 2 * B @ A` in float32. The new bundle includes a
+provenance file with its measured weights hash and the Magnetar artifact-format
+sidecar. Other base tensors keep their original storage dtype; use float32
+computation for comparison with this path.
+The tool requires PyTorch and Safetensors, substantial RAM and roughly 2.75 GB
+of free output space. It refuses to overwrite an existing output directory.
+
+```sh
+python tools/merge_kev_checkpoint.py /path/to/qwen-base \
+  /path/to/adapter_model.safetensors /path/to/kev-tokenizer \
+  /path/to/new-merged-bundle
+```
+
+The converter does not authenticate a file merely by its source path: it checks
+the pinned hashes embedded in the script. Source files must remain unchanged
+throughout conversion. It does not export `head.pt`, load a Runtime adapter,
+or implement the structured Kev decision interface. The result is a derived
+checkpoint whose weights digest differs from the base's.
+
 A real implementation must integrate the relevant Magnetar component and
 runtime contracts and validate end-to-end outputs against an independent
 reference. See the [upstream model or project](https://github.com/jaredpalmer/kev).
