@@ -38,8 +38,9 @@ The necessary Magnetar runtime work is tracked in
 Qwen3.5-0.8B-Base checkpoint to a new Safetensors bundle. It verifies the exact
 base, adapter, configuration and Kev tokenizer hashes, checks all 186 factor
 pairs, and computes `W + 2 * B @ A` in float32. The new bundle includes a
-provenance file with its measured weights hash. Other base tensors keep their
-original storage dtype; use float32 computation for comparison with this path.
+provenance file with its measured weights hash and the Magnetar artifact-format
+sidecar. Other base tensors keep their original storage dtype; use float32
+computation for comparison with this path.
 The tool requires PyTorch and Safetensors, substantial RAM and roughly 2.75 GB
 of free output space. It refuses to overwrite an existing output directory.
 

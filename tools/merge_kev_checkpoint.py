@@ -93,6 +93,9 @@ def main():
     shutil.copyfile(args.base_dir / "config.json", args.output_dir / "config.json")
     for name in ("tokenizer.json", "tokenizer_config.json"):
         shutil.copyfile(args.tokenizer_dir / name, args.output_dir / name)
+    (args.output_dir / "magnetar-artifact-format.yaml").write_text(
+        "artifact_format: huggingface\n", encoding="utf-8", newline="\n"
+    )
     output_weights = args.output_dir / "model.safetensors"
     save_file(weights, str(output_weights), metadata={"format": "pt"})
     output_sha = digest(output_weights)
