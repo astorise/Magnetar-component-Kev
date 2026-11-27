@@ -6,6 +6,7 @@
 //! It does not load checkpoints, run Qwen, tokenize text or implement a
 //! Magnetar Component Model export.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
@@ -89,7 +90,53 @@ pub struct DecisionScores {
     pub probabilities: Vec<f32>,
 }
 
+/// One already-decoded tensor from the checkpoint's `head` state dictionary.
+/// Authentication and safe decoding of the original file are caller-owned.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckpointTensor {
+    pub shape: Vec<usize>,
+    pub values: Vec<f32>,
+}
+
 impl PointerHead {
+    /// Construct the pointer head from `q.weight`, `q.bias`, `k.weight` and
+    /// `k.bias` in checkpoint order. The caller supplies the checkpoint's
+    /// temperature separately and must authenticate and safely decode it.
+    pub fn from_checkpoint_tensors(
+        mut tensors: BTreeMap<String, CheckpointTensor>,
+        temperature: f32,
+    ) -> Result<Self, HeadError> {
+        if tensors.len() != 4 {
+            return Err(HeadError::InvalidTensorInventory);
+        }
+        let q_weight = tensors
+            .remove("q.weight")
+            .ok_or(HeadError::InvalidTensorInventory)?;
+        let q_bias = tensors
+            .remove("q.bias")
+            .ok_or(HeadError::InvalidTensorInventory)?;
+        let k_weight = tensors
+            .remove("k.weight")
+            .ok_or(HeadError::InvalidTensorInventory)?;
+        let k_bias = tensors
+            .remove("k.bias")
+            .ok_or(HeadError::InvalidTensorInventory)?;
+        let [pointer, hidden] = q_weight.shape.as_slice() else {
+            return Err(HeadError::InvalidTensorInventory);
+        };
+        if *pointer == 0
+            || *hidden == 0
+            || k_weight.shape != q_weight.shape
+            || q_bias.shape != [*pointer]
+            || k_bias.shape != [*pointer]
+        {
+            return Err(HeadError::InvalidTensorInventory);
+        }
+        let query = LinearProjection::new(*hidden, *pointer, q_weight.values, q_bias.values)?;
+        let key = LinearProjection::new(*hidden, *pointer, k_weight.values, k_bias.values)?;
+        Self::new(query, key, temperature)
+    }
+
     /// Both projections must map the same hidden dimension to the same
     /// nonzero pointer dimension; temperature must be finite and positive.
     pub fn new(
@@ -144,6 +191,54 @@ impl PointerHead {
             probabilities,
         })
     }
+
+    /// Score a single independently executed question row. `hidden_states`
+    /// is the row's contiguous `[row.token_ids.len(), hidden_size]` output,
+    /// excluding the shared prefix. Option and decision indices are relative
+    /// to that row, as produced by [`encoding::encode_rows`]. The caller must
+    /// supply an encoded row: structural checks cannot authenticate token IDs
+    /// or establish that the backbone evaluated the row independently.
+    pub fn score_row(
+        &self,
+        row: &encoding::QuestionRow,
+        hidden_states: &[f32],
+    ) -> Result<DecisionScores, HeadError> {
+        let tokens = row.token_ids.len();
+        if tokens == 0
+            || row.position_ids.len() != tokens
+            || row.position_ids.first().copied().unwrap_or(0) == 0
+            || row
+                .position_ids
+                .windows(2)
+                .any(|pair| pair[0].checked_add(1) != Some(pair[1]))
+            || row.decision_index != tokens - 1
+            || !(1..=255).contains(&row.option_end_indices.len())
+            || row
+                .option_end_indices
+                .iter()
+                .any(|&index| index < 2 || index >= row.decision_index)
+            || row
+                .option_end_indices
+                .windows(2)
+                .any(|pair| pair[0].checked_add(2).is_none_or(|min| pair[1] < min))
+        {
+            return Err(HeadError::InvalidRow);
+        }
+        let hidden = self.query.input_dim;
+        if tokens.checked_mul(hidden) != Some(hidden_states.len()) {
+            return Err(HeadError::InvalidDimensions);
+        }
+        if hidden_states.iter().any(|value| !value.is_finite()) {
+            return Err(HeadError::NonFiniteValue);
+        }
+        let state = |index| &hidden_states[index * hidden..(index + 1) * hidden];
+        let options: Vec<_> = row
+            .option_end_indices
+            .iter()
+            .map(|&index| state(index))
+            .collect();
+        self.score(state(row.decision_index), &options)
+    }
 }
 
 /// Invalid weights, hidden states, or scoring parameters.
@@ -153,6 +248,8 @@ pub enum HeadError {
     InvalidTemperature,
     NonFiniteValue,
     NoOptions,
+    InvalidTensorInventory,
+    InvalidRow,
 }
 
 impl fmt::Display for HeadError {
@@ -162,6 +259,8 @@ impl fmt::Display for HeadError {
             Self::InvalidTemperature => "temperature must be finite and positive",
             Self::NonFiniteValue => "non-finite input or intermediate value",
             Self::NoOptions => "at least one option is required",
+            Self::InvalidTensorInventory => "pointer-head tensor inventory is invalid",
+            Self::InvalidRow => "question row indices or positions are invalid",
         };
         formatter.write_str(message)
     }

@@ -9,6 +9,10 @@ hidden states and weights, including biases, scaling, temperature and a stable
 per-question softmax. It validates tensor dimensions and non-finite values.
 It can also assemble tokenized state and question rows with independent
 positions and strict token limits, rejecting injected delimiter IDs.
+The pointer head can be constructed from already-decoded checkpoint tensors and
+can select the decision and option states from an encoded question row. Callers
+must authenticate and safely decode the head file, and run each question with
+an independent copy of the shared backbone state.
 The Kev-0.8B profile identifies the 24 Qwen3.5 text layers and all 186
 LoRA targets in the pinned base/adapter checkpoints. A standalone f32 LoRA
 reference applies their standard rank-16 factors; real checkpoint tensor
@@ -20,8 +24,8 @@ in Magnetar.
 
 ## Work required
 
-Compatible Qwen backbone, adapter loading and Runtime activation, structured
-choices and checkpoint temperature integration remain to be implemented.
+Adapter loading and Runtime activation, structured choices and checkpoint
+temperature integration with the existing Qwen backbone remain to be implemented.
 The necessary Magnetar runtime work is tracked in
 [Magnetar #215](https://github.com/astorise/Magnetar/issues/215).
 
